@@ -2540,22 +2540,28 @@ impl Project {
         }
     }
 
-    pub fn create_buffer(&mut self, cx: &mut Context<Self>) -> Task<Result<Entity<Buffer>>> {
-        self.buffer_store
-            .update(cx, |buffer_store, cx| buffer_store.create_buffer(cx))
+    pub fn create_buffer(
+        &mut self,
+        searchable: bool,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Entity<Buffer>>> {
+        self.buffer_store.update(cx, |buffer_store, cx| {
+            buffer_store.create_buffer(searchable, cx)
+        })
     }
 
     pub fn create_local_buffer(
         &mut self,
         text: &str,
         language: Option<Arc<Language>>,
+        project_searchable: bool,
         cx: &mut Context<Self>,
     ) -> Entity<Buffer> {
         if self.is_via_collab() || self.is_via_remote_server() {
             panic!("called create_local_buffer on a remote project")
         }
         self.buffer_store.update(cx, |buffer_store, cx| {
-            buffer_store.create_local_buffer(text, language, cx)
+            buffer_store.create_local_buffer(text, language, project_searchable, cx)
         })
     }
 
@@ -4394,6 +4400,13 @@ impl Project {
             .diagnostic_summary(include_ignored, cx)
     }
 
+    /// Returns a summary of the diagnostics for the provided project path only.
+    pub fn diagnostic_summary_for_path(&self, path: &ProjectPath, cx: &App) -> DiagnosticSummary {
+        self.lsp_store
+            .read(cx)
+            .diagnostic_summary_for_path(path, cx)
+    }
+
     pub fn diagnostic_summaries<'a>(
         &'a self,
         include_ignored: bool,
@@ -4913,7 +4926,7 @@ impl Project {
         mut cx: AsyncApp,
     ) -> Result<proto::OpenBufferResponse> {
         let buffer = this
-            .update(&mut cx, |this, cx| this.create_buffer(cx))?
+            .update(&mut cx, |this, cx| this.create_buffer(true, cx))?
             .await?;
         let peer_id = envelope.original_sender_id()?;
 
@@ -5243,12 +5256,6 @@ impl Project {
 
     pub fn agent_location(&self) -> Option<AgentLocation> {
         self.agent_location.clone()
-    }
-
-    pub fn mark_buffer_as_non_searchable(&self, buffer_id: BufferId, cx: &mut Context<Project>) {
-        self.buffer_store.update(cx, |buffer_store, _| {
-            buffer_store.mark_buffer_as_non_searchable(buffer_id)
-        });
     }
 }
 
