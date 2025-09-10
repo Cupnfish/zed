@@ -87,6 +87,18 @@ fn server_binary_arguments(server_path: &Path) -> Vec<OsString> {
     vec![server_path.into(), "--stdio".into()]
 }
 
+/// Pyright assigns each completion item a `sortText` of the form `XX.YYYY.name`.
+/// Where `XX` is the sorting category, `YYYY` is based on most recent usage,
+/// and `name` is the symbol name itself.
+///
+/// The problem with it is that Pyright adjusts the sort text based on previous resolutions (items for which we've issued `completion/resolve` call have their sortText adjusted),
+/// which - long story short - makes completion items list non-stable. Pyright probably relies on VSCode's implementation detail.
+/// see https://github.com/microsoft/pyright/blob/95ef4e103b9b2f129c9320427e51b73ea7cf78bd/packages/pyright-internal/src/languageService/completionProvider.ts#LL2873
+fn process_pyright_completions(items: &mut [lsp::CompletionItem]) {
+    for item in items {
+        item.sort_text.take();
+    }
+}
 pub struct PythonLspAdapter {
     node: NodeRuntime,
 }
@@ -232,26 +244,7 @@ impl LspAdapter for PythonLspAdapter {
     }
 
     async fn process_completions(&self, items: &mut [lsp::CompletionItem]) {
-        // Pyright assigns each completion item a `sortText` of the form `XX.YYYY.name`.
-        // Where `XX` is the sorting category, `YYYY` is based on most recent usage,
-        // and `name` is the symbol name itself.
-        //
-        // Because the symbol name is included, there generally are not ties when
-        // sorting by the `sortText`, so the symbol's fuzzy match score is not taken
-        // into account. Here, we remove the symbol name from the sortText in order
-        // to allow our own fuzzy score to be used to break ties.
-        //
-        // see https://github.com/microsoft/pyright/blob/95ef4e103b9b2f129c9320427e51b73ea7cf78bd/packages/pyright-internal/src/languageService/completionProvider.ts#LL2873
-        for item in items {
-            let Some(sort_text) = &mut item.sort_text else {
-                continue;
-            };
-            let mut parts = sort_text.split('.');
-            let Some(first) = parts.next() else { continue };
-            let Some(second) = parts.next() else { continue };
-            let Some(_) = parts.next() else { continue };
-            sort_text.replace_range(first.len() + second.len() + 1.., "");
-        }
+        process_pyright_completions(items);
     }
 
     async fn label_for_completion(
@@ -262,20 +255,34 @@ impl LspAdapter for PythonLspAdapter {
         let label = &item.label;
         let grammar = language.grammar()?;
         let highlight_id = match item.kind? {
-            lsp::CompletionItemKind::METHOD => grammar.highlight_id_for_name("function.method")?,
-            lsp::CompletionItemKind::FUNCTION => grammar.highlight_id_for_name("function")?,
-            lsp::CompletionItemKind::CLASS => grammar.highlight_id_for_name("type")?,
-            lsp::CompletionItemKind::CONSTANT => grammar.highlight_id_for_name("constant")?,
-            _ => return None,
+            lsp::CompletionItemKind::METHOD => grammar.highlight_id_for_name("function.method"),
+            lsp::CompletionItemKind::FUNCTION => grammar.highlight_id_for_name("function"),
+            lsp::CompletionItemKind::CLASS => grammar.highlight_id_for_name("type"),
+            lsp::CompletionItemKind::CONSTANT => grammar.highlight_id_for_name("constant"),
+            lsp::CompletionItemKind::VARIABLE => grammar.highlight_id_for_name("variable"),
+            _ => {
+                return None;
+            }
         };
         let filter_range = item
             .filter_text
             .as_deref()
             .and_then(|filter| label.find(filter).map(|ix| ix..ix + filter.len()))
             .unwrap_or(0..label.len());
+        let mut text = label.clone();
+        if let Some(completion_details) = item
+            .label_details
+            .as_ref()
+            .and_then(|details| details.description.as_ref())
+        {
+            write!(&mut text, " {}", completion_details).ok();
+        }
         Some(language::CodeLabel {
-            text: label.clone(),
-            runs: vec![(0..label.len(), highlight_id)],
+            runs: highlight_id
+                .map(|id| (0..label.len(), id))
+                .into_iter()
+                .collect(),
+            text,
             filter_range,
         })
     }
@@ -1490,26 +1497,7 @@ impl LspAdapter for BasedPyrightLspAdapter {
     }
 
     async fn process_completions(&self, items: &mut [lsp::CompletionItem]) {
-        // Pyright assigns each completion item a `sortText` of the form `XX.YYYY.name`.
-        // Where `XX` is the sorting category, `YYYY` is based on most recent usage,
-        // and `name` is the symbol name itself.
-        //
-        // Because the symbol name is included, there generally are not ties when
-        // sorting by the `sortText`, so the symbol's fuzzy match score is not taken
-        // into account. Here, we remove the symbol name from the sortText in order
-        // to allow our own fuzzy score to be used to break ties.
-        //
-        // see https://github.com/microsoft/pyright/blob/95ef4e103b9b2f129c9320427e51b73ea7cf78bd/packages/pyright-internal/src/languageService/completionProvider.ts#LL2873
-        for item in items {
-            let Some(sort_text) = &mut item.sort_text else {
-                continue;
-            };
-            let mut parts = sort_text.split('.');
-            let Some(first) = parts.next() else { continue };
-            let Some(second) = parts.next() else { continue };
-            let Some(_) = parts.next() else { continue };
-            sort_text.replace_range(first.len() + second.len() + 1.., "");
-        }
+        process_pyright_completions(items);
     }
 
     async fn label_for_completion(
@@ -1520,20 +1508,34 @@ impl LspAdapter for BasedPyrightLspAdapter {
         let label = &item.label;
         let grammar = language.grammar()?;
         let highlight_id = match item.kind? {
-            lsp::CompletionItemKind::METHOD => grammar.highlight_id_for_name("function.method")?,
-            lsp::CompletionItemKind::FUNCTION => grammar.highlight_id_for_name("function")?,
-            lsp::CompletionItemKind::CLASS => grammar.highlight_id_for_name("type")?,
-            lsp::CompletionItemKind::CONSTANT => grammar.highlight_id_for_name("constant")?,
-            _ => return None,
+            lsp::CompletionItemKind::METHOD => grammar.highlight_id_for_name("function.method"),
+            lsp::CompletionItemKind::FUNCTION => grammar.highlight_id_for_name("function"),
+            lsp::CompletionItemKind::CLASS => grammar.highlight_id_for_name("type"),
+            lsp::CompletionItemKind::CONSTANT => grammar.highlight_id_for_name("constant"),
+            lsp::CompletionItemKind::VARIABLE => grammar.highlight_id_for_name("variable"),
+            _ => {
+                return None;
+            }
         };
         let filter_range = item
             .filter_text
             .as_deref()
             .and_then(|filter| label.find(filter).map(|ix| ix..ix + filter.len()))
             .unwrap_or(0..label.len());
+        let mut text = label.clone();
+        if let Some(completion_details) = item
+            .label_details
+            .as_ref()
+            .and_then(|details| details.description.as_ref())
+        {
+            write!(&mut text, " {}", completion_details).ok();
+        }
         Some(language::CodeLabel {
-            text: label.clone(),
-            runs: vec![(0..label.len(), highlight_id)],
+            runs: highlight_id
+                .map(|id| (0..label.len(), id))
+                .into_iter()
+                .collect(),
+            text,
             filter_range,
         })
     }
