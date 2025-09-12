@@ -48,7 +48,10 @@ use terminal_hyperlinks::RegexSearches;
 use terminal_settings::{AlternateScroll, CursorShape, TerminalSettings};
 use theme::{ActiveTheme, Theme};
 use urlencoding;
-use util::{paths::home_dir, truncate_and_trailoff};
+use util::{
+    paths::{self, home_dir},
+    truncate_and_trailoff,
+};
 
 use std::{
     borrow::Cow,
@@ -291,12 +294,11 @@ impl TerminalError {
                     Err(s) => s,
                 }
             })
-            .unwrap_or_else(|| match dirs::home_dir() {
-                Some(dir) => format!(
+            .unwrap_or_else(|| {
+                format!(
                     "<none specified, using home directory> {}",
-                    dir.into_os_string().to_string_lossy()
-                ),
-                None => "<none specified, could not find home directory>".to_string(),
+                    paths::home_dir().to_string_lossy()
+                )
             })
     }
 
@@ -531,10 +533,14 @@ impl TerminalBuilder {
             },
         };
 
-        if cfg!(not(target_os = "windows")) && !activation_script.is_empty() && no_task {
+        if !activation_script.is_empty() && no_task {
             for activation_script in activation_script {
                 terminal.input(activation_script.into_bytes());
-                terminal.write_to_pty(b"\n");
+                terminal.write_to_pty(if cfg!(windows) {
+                    &b"\r\n"[..]
+                } else {
+                    &b"\n"[..]
+                });
             }
             terminal.clear();
         }
