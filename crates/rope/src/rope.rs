@@ -784,7 +784,11 @@ impl<'a> Chunks<'a> {
             slice_start..slice_end
         };
 
-        let bitmask = (1u128 << slice_range.end as u128).saturating_sub(1);
+        let bitmask = if slice_range.end >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << slice_range.end as u128).saturating_sub(1)
+        };
 
         let chars = (chunk.chars() & bitmask) >> slice_range.start;
         let tabs = (chunk.tabs & bitmask) >> slice_range.start;
